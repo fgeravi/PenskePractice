@@ -5,7 +5,10 @@ with open("race_data.json", "r") as file:
 
 drivers = data["drivers"]
 
-sorted_drivers = sorted(drivers, key=lambda driver: driver["car_number"])
+slowest_lap = 0
 
-for driver in sorted_drivers:
-    print(driver["car_number"], "-", driver["name"])
+for driver in drivers:
+    if driver["lap_time"] > slowest_lap:
+        slowest_lap = driver["lap_time"]
+
+print("Slowest Driver: ", driver["name"])
