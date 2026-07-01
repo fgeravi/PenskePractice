@@ -5,10 +5,10 @@ with open("race_data.json", "r") as file:
 
 drivers = data["drivers"]
 
-winner = ""
+count = 0
 
 for driver in drivers:
-    if driver["position"] == 1:
-        winner = driver["name"]
-        
-print("Winning driver: ", winner)
+    if driver["lap_time"] < 30:
+        count = count + 1
+
+print("Driver count under 30 seconds: ", count)
