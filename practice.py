@@ -5,10 +5,7 @@ with open("race_data.json", "r") as file:
 
 drivers = data["drivers"]
 
-total_time = 0
+sorted_drivers = sorted(drivers, key=lambda driver: driver["car_number"])
 
-for driver in drivers:
-    total_time = total_time + driver["lap_time"]
-    average_time = total_time / len(drivers)
-
-print("Average lap time: ", average_time)
+for driver in sorted_drivers:
+    print(driver["car_number"], "-", driver["name"])
