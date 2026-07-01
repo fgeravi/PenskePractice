@@ -1,0 +1,35 @@
+{
+  "race": "Daytona 500",
+  "drivers": [
+    {
+      "name": "Logano",
+      "car_number": 22,
+      "lap_time": 30.12,
+      "position": 3
+    },
+    {
+      "name": "Blaney",
+      "car_number": 12,
+      "lap_time": 29.95,
+      "position": 1
+    },
+    {
+      "name": "Cindric",
+      "car_number": 2,
+      "lap_time": 30.31,
+      "position": 5
+    },
+    {
+      "name": "Larson",
+      "car_number": 5,
+      "lap_time": 29.81,
+      "position": 2
+    },
+    {
+      "name": "Byron",
+      "car_number": 24,
+      "lap_time": 30.05,
+      "position": 4
+    }
+  ]
+}
