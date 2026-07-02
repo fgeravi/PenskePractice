@@ -6,4 +6,5 @@ with open("race_data.json", "r") as file:
 drivers = data["drivers"]
 
 for driver in drivers:
-    print(driver)
+    for key, value in driver.items():
+        print(key, ":", value)
