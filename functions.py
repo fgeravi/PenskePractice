@@ -1,5 +1,5 @@
-def lap_difference(lap1, lap2):
-    lap_difference = lap2 - lap1
-    return abs(lap_difference)
+def average_speed(speed1, speed2):
+    average = (speed1 + speed2) / 2
+    return average
 
-print(lap_difference(15.6, 18.5))
+print(average_speed(30, 25))
