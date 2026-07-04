@@ -1,10 +1,6 @@
-def tire_needs_change(tread_depth):
-    if tread_depth <= 3:
-        return "Change"
-    if tread_depth > 3 and tread_depth <= 5:
-        return "Inspect soon"
-    if tread_depth > 5:
-        return "Good"
-    
-print(tire_needs_change(3.5))
-    
+laps = [30.11, 29.98, 30.25, 29.87]
+
+def best_lap(laps):
+    return min(laps)
+
+print(best_lap(laps))
