@@ -1,7 +1,10 @@
-def faster_driver(driver1, time1, driver2, time2):
-    if time1 < time2:
-        return driver1
-    else:
-        return driver2
+def tire_needs_change(tread_depth):
+    if tread_depth <= 3:
+        return "Change"
+    if tread_depth > 3 and tread_depth <= 5:
+        return "Inspect soon"
+    if tread_depth > 5:
+        return "Good"
     
-print(faster_driver("Logano", 30, "Blaney", 40))
+print(tire_needs_change(3.5))
+    
