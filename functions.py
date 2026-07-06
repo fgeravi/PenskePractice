@@ -1,6 +1,8 @@
-laps = [30.11, 29.98, 30.25, 29.87]
+def average(times):
+    return sum(times) / len(times)
 
-def best_lap(laps):
-    return min(laps)
+laps = [29.9, 30.0, 30.1]
 
-print(best_lap(laps))
+meeps = [4, 5, 4, 3, 5, 4]
+
+print(average(meeps))
