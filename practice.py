@@ -1,11 +1,4 @@
-drivers = [
-    {"name": "Blaney", "position": 2},
-    {"name": "Logano", "position": 5},
-    {"name": "Byron", "position": 1},
-    {"name": "Bell", "position": 3}
-]
-
-drivers.sort(key=lambda driver: driver["position"])
+drivers = ["Blaney", "Logano", "Byron", "Bell"]
 
 for driver in drivers:
-    print(driver["name"], driver["position"])
+    print(driver)
