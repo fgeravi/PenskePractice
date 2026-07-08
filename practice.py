@@ -9,4 +9,4 @@ def estimate_pit_stops(total_laps, fuel_per_tank):
     print(f"Estimated Stops: {stops - 1}")
 
 
-    estimate_pit_stops(400, 65)
+estimate_pit_stops(400, 65)
