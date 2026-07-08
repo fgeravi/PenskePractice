@@ -1,14 +1,12 @@
-parts = [
-    {"name": "Brake Rotor", "used": 420, "limit": 500},
-    {"name": "Hub Bearing", "used": 175, "limit": 300},
-    {"name": "Steering Rack", "used": 290, "limit": 300},
-]
+def estimate_pit_stops(total_laps, fuel_per_tank):
+    stops = total_laps // fuel_per_tank
 
-def parts_needing_service(parts):
-    print("=== Parts Near Service ===")
+    if total_laps % fuel_per_tank != 0:
+        stops += 1
 
-    for part in parts:
-        percent = (part["used"] / part["limit"]) * 100
+    print(f"Race Distance: {total_laps}")
+    print(f"Fuel Window: {fuel_per_tank}")
+    print(f"Estimated Stops: {stops - 1}")
 
-        if percent >= 90:
-            print(f"{part['name']} ({percent:.1f}% used)")
+
+    estimate_pit_stops(400, 65)
