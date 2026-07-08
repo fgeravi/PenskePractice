@@ -1,13 +1,14 @@
-tires = [
-    {"set": "A12", "compound": "Soft", "laps": 22},
-    {"set": "B07", "compound": "Medium", "laps": 5},
-    {"set": "C03", "compound": "Hard", "laps": 48},
+parts = [
+    {"name": "Brake Rotor", "used": 420, "limit": 500},
+    {"name": "Hub Bearing", "used": 175, "limit": 300},
+    {"name": "Steering Rack", "used": 290, "limit": 300},
 ]
 
-def find_freshest_tire(tires):
-    freshest = min(tires, key=lambda tire: tire["laps"])
+def parts_needing_service(parts):
+    print("=== Parts Near Service ===")
 
-    print("Freshest Tire")
-    print(f"Set: {freshest['set']}")
-    print(f"Compound: {freshest['compound']}")
-    print(f"Laps: {freshest['laps']}")
+    for part in parts:
+        percent = (part["used"] / part["limit"]) * 100
+
+        if percent >= 90:
+            print(f"{part['name']} ({percent:.1f}% used)")
