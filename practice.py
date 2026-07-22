@@ -1,132 +1,147 @@
-"""Calculate rolling statistics from a stream of telemetry samples."""
+"""Parse and validate incoming race-car telemetry packets."""
 
 from __future__ import annotations
 
-from collections import deque
+import json
 from dataclasses import dataclass
-from statistics import fmean, pstdev
+from enum import Enum
+from typing import Any
+
+
+class TelemetryValidationError(ValueError):
+    """Raised when a telemetry packet contains invalid data."""
+
+
+class Gear(Enum):
+    """Valid transmission states reported by the vehicle."""
+
+    REVERSE = -1
+    NEUTRAL = 0
+    FIRST = 1
+    SECOND = 2
+    THIRD = 3
+    FOURTH = 4
+    FIFTH = 5
+    SIXTH = 6
 
 
 @dataclass(frozen=True)
-class SpeedSample:
-    """A single timestamped vehicle-speed measurement."""
+class TelemetryPacket:
+    """A validated snapshot of vehicle telemetry."""
 
+    car_number: int
     timestamp_seconds: float
     speed_mph: float
+    engine_rpm: int
+    throttle_percent: float
+    brake_percent: float
+    gear: Gear
 
+    def __post_init__(self) -> None:
+        """Run validation after the dataclass has been created."""
 
-@dataclass(frozen=True)
-class RollingSpeedSummary:
-    """Statistics calculated from the current rolling window."""
+        if self.car_number <= 0:
+            raise TelemetryValidationError("Car number must be positive.")
 
-    sample_count: int
-    average_speed_mph: float
-    minimum_speed_mph: float
-    maximum_speed_mph: float
-    standard_deviation: float
+        if self.timestamp_seconds < 0:
+            raise TelemetryValidationError("Timestamp cannot be negative.")
 
+        if not 0 <= self.speed_mph <= 250:
+            raise TelemetryValidationError(
+                f"Speed must be between 0 and 250 mph, received {self.speed_mph}."
+            )
 
-class RollingTelemetryAnalyzer:
-    """Maintain a fixed-size window of recent telemetry samples."""
+        if not 0 <= self.engine_rpm <= 12_000:
+            raise TelemetryValidationError(
+                f"Engine RPM is outside the expected range: {self.engine_rpm}."
+            )
 
-    def __init__(self, window_size: int = 20) -> None:
-        if window_size < 2:
-            raise ValueError("Window size must be at least 2.")
-
-        self._samples: deque[SpeedSample] = deque(maxlen=window_size)
-
-    def add_sample(self, sample: SpeedSample) -> None:
-        """Validate and add a sample to the rolling window."""
-
-        if sample.timestamp_seconds < 0:
-            raise ValueError("Timestamp cannot be negative.")
-
-        if not 0 <= sample.speed_mph <= 250:
-            raise ValueError("Speed must be between 0 and 250 mph.")
-
-        if self._samples:
-            previous = self._samples[-1]
-
-            if sample.timestamp_seconds <= previous.timestamp_seconds:
-                raise ValueError(
-                    "Samples must be added in increasing timestamp order."
+        for field_name, value in (
+            ("throttle_percent", self.throttle_percent),
+            ("brake_percent", self.brake_percent),
+        ):
+            if not 0 <= value <= 100:
+                raise TelemetryValidationError(
+                    f"{field_name} must be between 0 and 100."
                 )
 
-        self._samples.append(sample)
+    @property
+    def is_braking(self) -> bool:
+        """Return whether the driver is applying meaningful brake pressure."""
 
-    def summarize(self) -> RollingSpeedSummary:
-        """Calculate statistics for the current window."""
+        return self.brake_percent >= 5.0
 
-        if not self._samples:
-            raise RuntimeError("Cannot summarize an empty telemetry window.")
+    @property
+    def is_full_throttle(self) -> bool:
+        """Treat values above 98 percent as full throttle."""
 
-        speeds = [sample.speed_mph for sample in self._samples]
+        return self.throttle_percent >= 98.0
 
-        return RollingSpeedSummary(
-            sample_count=len(speeds),
-            average_speed_mph=fmean(speeds),
-            minimum_speed_mph=min(speeds),
-            maximum_speed_mph=max(speeds),
-            standard_deviation=pstdev(speeds),
-        )
+    @classmethod
+    def from_json(cls, raw_packet: str) -> "TelemetryPacket":
+        """Create a telemetry packet from a JSON string."""
 
-    def detect_sudden_speed_drop(
-        self,
-        minimum_drop_mph: float = 20.0,
-    ) -> bool:
-        """Detect a large speed decrease between the latest two samples."""
+        try:
+            data: dict[str, Any] = json.loads(raw_packet)
+        except json.JSONDecodeError as exc:
+            raise TelemetryValidationError("Packet is not valid JSON.") from exc
 
-        if len(self._samples) < 2:
-            return False
+        required_fields = {
+            "car_number",
+            "timestamp_seconds",
+            "speed_mph",
+            "engine_rpm",
+            "throttle_percent",
+            "brake_percent",
+            "gear",
+        }
 
-        previous = self._samples[-2]
-        current = self._samples[-1]
-        speed_drop = previous.speed_mph - current.speed_mph
+        missing_fields = required_fields - data.keys()
 
-        return speed_drop >= minimum_drop_mph
+        if missing_fields:
+            missing = ", ".join(sorted(missing_fields))
+            raise TelemetryValidationError(f"Missing fields: {missing}")
 
-    def calculate_acceleration_mph_per_second(self) -> float:
-        """Calculate acceleration between the latest two samples."""
-
-        if len(self._samples) < 2:
-            raise RuntimeError("At least two samples are required.")
-
-        previous = self._samples[-2]
-        current = self._samples[-1]
-
-        speed_change = current.speed_mph - previous.speed_mph
-        time_change = current.timestamp_seconds - previous.timestamp_seconds
-
-        return speed_change / time_change
+        try:
+            return cls(
+                car_number=int(data["car_number"]),
+                timestamp_seconds=float(data["timestamp_seconds"]),
+                speed_mph=float(data["speed_mph"]),
+                engine_rpm=int(data["engine_rpm"]),
+                throttle_percent=float(data["throttle_percent"]),
+                brake_percent=float(data["brake_percent"]),
+                gear=Gear(int(data["gear"])),
+            )
+        except (TypeError, ValueError) as exc:
+            raise TelemetryValidationError(
+                "One or more telemetry fields have an invalid type or value."
+            ) from exc
 
 
 def main() -> None:
-    analyzer = RollingTelemetryAnalyzer(window_size=5)
+    """Run a basic parsing example."""
 
-    samples = [
-        SpeedSample(0.0, 151.2),
-        SpeedSample(0.5, 158.6),
-        SpeedSample(1.0, 165.3),
-        SpeedSample(1.5, 169.8),
-        SpeedSample(2.0, 137.1),
-    ]
+    raw_packet = """
+    {
+        "car_number": 12,
+        "timestamp_seconds": 51.42,
+        "speed_mph": 181.6,
+        "engine_rpm": 8340,
+        "throttle_percent": 100,
+        "brake_percent": 0,
+        "gear": 5
+    }
+    """
 
-    for sample in samples:
-        analyzer.add_sample(sample)
+    try:
+        packet = TelemetryPacket.from_json(raw_packet)
+    except TelemetryValidationError as exc:
+        print(f"Packet rejected: {exc}")
+        return
 
-        if analyzer.detect_sudden_speed_drop():
-            print(
-                f"Warning: sudden speed drop detected at "
-                f"{sample.timestamp_seconds:.1f} seconds."
-            )
-
-    summary = analyzer.summarize()
-    acceleration = analyzer.calculate_acceleration_mph_per_second()
-
-    print(f"Samples analyzed: {summary.sample_count}")
-    print(f"Average speed: {summary.average_speed_mph:.2f} mph")
-    print(f"Speed variation: {summary.standard_deviation:.2f} mph")
-    print(f"Latest acceleration: {acceleration:.2f} mph/s")
+    print(packet)
+    print(f"Full throttle: {packet.is_full_throttle}")
+    print(f"Braking: {packet.is_braking}")
 
 
 if __name__ == "__main__":
