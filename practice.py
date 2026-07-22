@@ -1,147 +1,131 @@
-"""Parse and validate incoming race-car telemetry packets."""
+"""A small thread-safe cache with time-based expiration."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any
+from threading import RLock
+from time import monotonic
+from typing import Generic, TypeVar
 
 
-class TelemetryValidationError(ValueError):
-    """Raised when a telemetry packet contains invalid data."""
+KeyType = TypeVar("KeyType")
+ValueType = TypeVar("ValueType")
 
 
-class Gear(Enum):
-    """Valid transmission states reported by the vehicle."""
+@dataclass
+class CacheEntry(Generic[ValueType]):
+    """Store a cached value and the time at which it expires."""
 
-    REVERSE = -1
-    NEUTRAL = 0
-    FIRST = 1
-    SECOND = 2
-    THIRD = 3
-    FOURTH = 4
-    FIFTH = 5
-    SIXTH = 6
+    value: ValueType
+    expires_at: float
 
 
-@dataclass(frozen=True)
-class TelemetryPacket:
-    """A validated snapshot of vehicle telemetry."""
+class TTLCache(Generic[KeyType, ValueType]):
+    """Store values until their configured time-to-live expires."""
 
-    car_number: int
-    timestamp_seconds: float
-    speed_mph: float
-    engine_rpm: int
-    throttle_percent: float
-    brake_percent: float
-    gear: Gear
+    def __init__(self, default_ttl_seconds: float = 60.0) -> None:
+        if default_ttl_seconds <= 0:
+            raise ValueError("Default TTL must be greater than zero.")
 
-    def __post_init__(self) -> None:
-        """Run validation after the dataclass has been created."""
+        self._default_ttl_seconds = default_ttl_seconds
+        self._entries: dict[KeyType, CacheEntry[ValueType]] = {}
+        self._lock = RLock()
 
-        if self.car_number <= 0:
-            raise TelemetryValidationError("Car number must be positive.")
+    def set(
+        self,
+        key: KeyType,
+        value: ValueType,
+        ttl_seconds: float | None = None,
+    ) -> None:
+        """Insert or replace a cached value."""
 
-        if self.timestamp_seconds < 0:
-            raise TelemetryValidationError("Timestamp cannot be negative.")
+        ttl = self._default_ttl_seconds if ttl_seconds is None else ttl_seconds
 
-        if not 0 <= self.speed_mph <= 250:
-            raise TelemetryValidationError(
-                f"Speed must be between 0 and 250 mph, received {self.speed_mph}."
-            )
+        if ttl <= 0:
+            raise ValueError("TTL must be greater than zero.")
 
-        if not 0 <= self.engine_rpm <= 12_000:
-            raise TelemetryValidationError(
-                f"Engine RPM is outside the expected range: {self.engine_rpm}."
-            )
+        entry = CacheEntry(
+            value=value,
+            expires_at=monotonic() + ttl,
+        )
 
-        for field_name, value in (
-            ("throttle_percent", self.throttle_percent),
-            ("brake_percent", self.brake_percent),
-        ):
-            if not 0 <= value <= 100:
-                raise TelemetryValidationError(
-                    f"{field_name} must be between 0 and 100."
-                )
+        with self._lock:
+            self._entries[key] = entry
 
-    @property
-    def is_braking(self) -> bool:
-        """Return whether the driver is applying meaningful brake pressure."""
+    def get(self, key: KeyType) -> ValueType | None:
+        """Return a value if it exists and has not expired."""
 
-        return self.brake_percent >= 5.0
+        with self._lock:
+            entry = self._entries.get(key)
 
-    @property
-    def is_full_throttle(self) -> bool:
-        """Treat values above 98 percent as full throttle."""
+            if entry is None:
+                return None
 
-        return self.throttle_percent >= 98.0
+            if entry.expires_at <= monotonic():
+                del self._entries[key]
+                return None
 
-    @classmethod
-    def from_json(cls, raw_packet: str) -> "TelemetryPacket":
-        """Create a telemetry packet from a JSON string."""
+            return entry.value
 
-        try:
-            data: dict[str, Any] = json.loads(raw_packet)
-        except json.JSONDecodeError as exc:
-            raise TelemetryValidationError("Packet is not valid JSON.") from exc
+    def delete(self, key: KeyType) -> bool:
+        """Delete a key and return whether it previously existed."""
 
-        required_fields = {
-            "car_number",
-            "timestamp_seconds",
-            "speed_mph",
-            "engine_rpm",
-            "throttle_percent",
-            "brake_percent",
-            "gear",
-        }
+        with self._lock:
+            return self._entries.pop(key, None) is not None
 
-        missing_fields = required_fields - data.keys()
+    def clear_expired(self) -> int:
+        """Remove every expired entry and return the number removed."""
 
-        if missing_fields:
-            missing = ", ".join(sorted(missing_fields))
-            raise TelemetryValidationError(f"Missing fields: {missing}")
+        current_time = monotonic()
 
-        try:
-            return cls(
-                car_number=int(data["car_number"]),
-                timestamp_seconds=float(data["timestamp_seconds"]),
-                speed_mph=float(data["speed_mph"]),
-                engine_rpm=int(data["engine_rpm"]),
-                throttle_percent=float(data["throttle_percent"]),
-                brake_percent=float(data["brake_percent"]),
-                gear=Gear(int(data["gear"])),
-            )
-        except (TypeError, ValueError) as exc:
-            raise TelemetryValidationError(
-                "One or more telemetry fields have an invalid type or value."
-            ) from exc
+        with self._lock:
+            expired_keys = [
+                key
+                for key, entry in self._entries.items()
+                if entry.expires_at <= current_time
+            ]
+
+            for key in expired_keys:
+                del self._entries[key]
+
+        return len(expired_keys)
+
+    def __contains__(self, key: KeyType) -> bool:
+        """Support expressions such as: if key in cache."""
+
+        return self.get(key) is not None
+
+    def __len__(self) -> int:
+        """Return the number of active, non-expired entries."""
+
+        self.clear_expired()
+
+        with self._lock:
+            return len(self._entries)
 
 
 def main() -> None:
-    """Run a basic parsing example."""
+    session_cache: TTLCache[str, dict[str, object]] = TTLCache(
+        default_ttl_seconds=30
+    )
 
-    raw_packet = """
-    {
-        "car_number": 12,
-        "timestamp_seconds": 51.42,
-        "speed_mph": 181.6,
-        "engine_rpm": 8340,
-        "throttle_percent": 100,
-        "brake_percent": 0,
-        "gear": 5
-    }
-    """
+    session_cache.set(
+        "car-12",
+        {
+            "driver": "Ryan Blaney",
+            "last_lap": 29.88,
+        },
+    )
 
-    try:
-        packet = TelemetryPacket.from_json(raw_packet)
-    except TelemetryValidationError as exc:
-        print(f"Packet rejected: {exc}")
-        return
+    session = session_cache.get("car-12")
 
-    print(packet)
-    print(f"Full throttle: {packet.is_full_throttle}")
-    print(f"Braking: {packet.is_braking}")
+    if session is None:
+        print("Session was not found.")
+    else:
+        print(f"Cached driver: {session['driver']}")
+        print(f"Cached lap: {session['last_lap']} seconds")
+
+    print(f"Active entries: {len(session_cache)}")
 
 
 if __name__ == "__main__":
