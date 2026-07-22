@@ -1,131 +1,138 @@
-"""A small thread-safe cache with time-based expiration."""
+"""Find the lowest-cost route through a weighted graph."""
 
 from __future__ import annotations
 
+import heapq
 from dataclasses import dataclass
-from threading import RLock
-from time import monotonic
-from typing import Generic, TypeVar
+from math import inf
 
 
-KeyType = TypeVar("KeyType")
-ValueType = TypeVar("ValueType")
+@dataclass(frozen=True)
+class RouteResult:
+    """The completed path and its total cost."""
+
+    path: list[str]
+    total_cost: float
 
 
-@dataclass
-class CacheEntry(Generic[ValueType]):
-    """Store a cached value and the time at which it expires."""
+class WeightedGraph:
+    """An adjacency-list implementation of a weighted directed graph."""
 
-    value: ValueType
-    expires_at: float
+    def __init__(self) -> None:
+        self._edges: dict[str, list[tuple[str, float]]] = {}
 
-
-class TTLCache(Generic[KeyType, ValueType]):
-    """Store values until their configured time-to-live expires."""
-
-    def __init__(self, default_ttl_seconds: float = 60.0) -> None:
-        if default_ttl_seconds <= 0:
-            raise ValueError("Default TTL must be greater than zero.")
-
-        self._default_ttl_seconds = default_ttl_seconds
-        self._entries: dict[KeyType, CacheEntry[ValueType]] = {}
-        self._lock = RLock()
-
-    def set(
+    def add_edge(
         self,
-        key: KeyType,
-        value: ValueType,
-        ttl_seconds: float | None = None,
+        start: str,
+        destination: str,
+        cost: float,
+        *,
+        bidirectional: bool = False,
     ) -> None:
-        """Insert or replace a cached value."""
+        """Add a weighted edge between two nodes."""
 
-        ttl = self._default_ttl_seconds if ttl_seconds is None else ttl_seconds
+        if not start or not destination:
+            raise ValueError("Node names cannot be empty.")
 
-        if ttl <= 0:
-            raise ValueError("TTL must be greater than zero.")
+        if cost < 0:
+            raise ValueError("Dijkstra's algorithm requires nonnegative costs.")
 
-        entry = CacheEntry(
-            value=value,
-            expires_at=monotonic() + ttl,
+        self._edges.setdefault(start, []).append((destination, cost))
+        self._edges.setdefault(destination, [])
+
+        if bidirectional:
+            self._edges[destination].append((start, cost))
+
+    def shortest_path(self, start: str, destination: str) -> RouteResult | None:
+        """Find the least expensive route using Dijkstra's algorithm."""
+
+        if start not in self._edges:
+            raise KeyError(f"Unknown starting node: {start}")
+
+        if destination not in self._edges:
+            raise KeyError(f"Unknown destination node: {destination}")
+
+        distances = {node: inf for node in self._edges}
+        previous: dict[str, str | None] = {
+            node: None for node in self._edges
+        }
+
+        distances[start] = 0.0
+
+        # Each heap entry is stored as (distance, node).
+        priority_queue: list[tuple[float, str]] = [(0.0, start)]
+
+        while priority_queue:
+            current_cost, current_node = heapq.heappop(priority_queue)
+
+            # Ignore outdated heap entries created before a shorter path
+            # to this node was discovered.
+            if current_cost > distances[current_node]:
+                continue
+
+            if current_node == destination:
+                break
+
+            for neighbor, edge_cost in self._edges[current_node]:
+                new_cost = current_cost + edge_cost
+
+                if new_cost < distances[neighbor]:
+                    distances[neighbor] = new_cost
+                    previous[neighbor] = current_node
+                    heapq.heappush(
+                        priority_queue,
+                        (new_cost, neighbor),
+                    )
+
+        if distances[destination] == inf:
+            return None
+
+        path = self._reconstruct_path(
+            previous=previous,
+            destination=destination,
         )
 
-        with self._lock:
-            self._entries[key] = entry
+        return RouteResult(
+            path=path,
+            total_cost=distances[destination],
+        )
 
-    def get(self, key: KeyType) -> ValueType | None:
-        """Return a value if it exists and has not expired."""
+    @staticmethod
+    def _reconstruct_path(
+        previous: dict[str, str | None],
+        destination: str,
+    ) -> list[str]:
+        """Walk backward through the previous-node mapping."""
 
-        with self._lock:
-            entry = self._entries.get(key)
+        path: list[str] = []
+        current: str | None = destination
 
-            if entry is None:
-                return None
+        while current is not None:
+            path.append(current)
+            current = previous[current]
 
-            if entry.expires_at <= monotonic():
-                del self._entries[key]
-                return None
-
-            return entry.value
-
-    def delete(self, key: KeyType) -> bool:
-        """Delete a key and return whether it previously existed."""
-
-        with self._lock:
-            return self._entries.pop(key, None) is not None
-
-    def clear_expired(self) -> int:
-        """Remove every expired entry and return the number removed."""
-
-        current_time = monotonic()
-
-        with self._lock:
-            expired_keys = [
-                key
-                for key, entry in self._entries.items()
-                if entry.expires_at <= current_time
-            ]
-
-            for key in expired_keys:
-                del self._entries[key]
-
-        return len(expired_keys)
-
-    def __contains__(self, key: KeyType) -> bool:
-        """Support expressions such as: if key in cache."""
-
-        return self.get(key) is not None
-
-    def __len__(self) -> int:
-        """Return the number of active, non-expired entries."""
-
-        self.clear_expired()
-
-        with self._lock:
-            return len(self._entries)
+        path.reverse()
+        return path
 
 
 def main() -> None:
-    session_cache: TTLCache[str, dict[str, object]] = TTLCache(
-        default_ttl_seconds=30
-    )
+    graph = WeightedGraph()
 
-    session_cache.set(
-        "car-12",
-        {
-            "driver": "Ryan Blaney",
-            "last_lap": 29.88,
-        },
-    )
+    graph.add_edge("Garage", "Fuel Station", 3.2, bidirectional=True)
+    graph.add_edge("Garage", "Tire Area", 2.0, bidirectional=True)
+    graph.add_edge("Tire Area", "Inspection", 2.3, bidirectional=True)
+    graph.add_edge("Fuel Station", "Inspection", 1.4, bidirectional=True)
+    graph.add_edge("Inspection", "Pit Lane", 1.8, bidirectional=True)
+    graph.add_edge("Tire Area", "Pit Lane", 5.0, bidirectional=True)
 
-    session = session_cache.get("car-12")
+    result = graph.shortest_path("Garage", "Pit Lane")
 
-    if session is None:
-        print("Session was not found.")
-    else:
-        print(f"Cached driver: {session['driver']}")
-        print(f"Cached lap: {session['last_lap']} seconds")
+    if result is None:
+        print("No available route.")
+        return
 
-    print(f"Active entries: {len(session_cache)}")
+    print("Route:", " -> ".join(result.path))
+    print(f"Total cost: {result.total_cost:.1f}")
 
 
 if __name__ == "__main__":
