@@ -1,138 +1,164 @@
-"""Find the lowest-cost route through a weighted graph."""
+"""Process telemetry events using a producer-consumer pipeline."""
 
 from __future__ import annotations
 
-import heapq
+import logging
+import random
+import threading
+import time
 from dataclasses import dataclass
-from math import inf
+from queue import Queue
+from typing import Final
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(threadName)s | %(levelname)s | %(message)s",
+)
+
+LOGGER = logging.getLogger(__name__)
+STOP_SIGNAL: Final = object()
 
 
 @dataclass(frozen=True)
-class RouteResult:
-    """The completed path and its total cost."""
+class TelemetryEvent:
+    """A telemetry event produced by a vehicle data source."""
 
-    path: list[str]
-    total_cost: float
+    car_number: int
+    sequence_number: int
+    speed_mph: float
+    engine_rpm: int
 
 
-class WeightedGraph:
-    """An adjacency-list implementation of a weighted directed graph."""
+class TelemetryProducer(threading.Thread):
+    """Generate telemetry events and place them in a shared queue."""
 
-    def __init__(self) -> None:
-        self._edges: dict[str, list[tuple[str, float]]] = {}
-
-    def add_edge(
+    def __init__(
         self,
-        start: str,
-        destination: str,
-        cost: float,
-        *,
-        bidirectional: bool = False,
+        output_queue: Queue[TelemetryEvent | object],
+        event_count: int,
+        consumer_count: int,
     ) -> None:
-        """Add a weighted edge between two nodes."""
+        super().__init__(name="telemetry-producer")
+        self._output_queue = output_queue
+        self._event_count = event_count
+        self._consumer_count = consumer_count
 
-        if not start or not destination:
-            raise ValueError("Node names cannot be empty.")
+    def run(self) -> None:
+        try:
+            for sequence_number in range(1, self._event_count + 1):
+                event = TelemetryEvent(
+                    car_number=12,
+                    sequence_number=sequence_number,
+                    speed_mph=round(random.uniform(145, 190), 2),
+                    engine_rpm=random.randint(7_000, 9_500),
+                )
 
-        if cost < 0:
-            raise ValueError("Dijkstra's algorithm requires nonnegative costs.")
+                # Queue.put blocks when the queue reaches its maximum
+                # size, which prevents the producer from overwhelming
+                # slower consumers.
+                self._output_queue.put(event)
+                LOGGER.info("Produced event %s", sequence_number)
 
-        self._edges.setdefault(start, []).append((destination, cost))
-        self._edges.setdefault(destination, [])
+                time.sleep(0.05)
+        finally:
+            # Each consumer needs its own stop signal because a queue
+            # item can only be removed once.
+            for _ in range(self._consumer_count):
+                self._output_queue.put(STOP_SIGNAL)
 
-        if bidirectional:
-            self._edges[destination].append((start, cost))
+            LOGGER.info("Producer finished")
 
-    def shortest_path(self, start: str, destination: str) -> RouteResult | None:
-        """Find the least expensive route using Dijkstra's algorithm."""
 
-        if start not in self._edges:
-            raise KeyError(f"Unknown starting node: {start}")
+class TelemetryConsumer(threading.Thread):
+    """Read and process telemetry events from a shared queue."""
 
-        if destination not in self._edges:
-            raise KeyError(f"Unknown destination node: {destination}")
+    def __init__(
+        self,
+        input_queue: Queue[TelemetryEvent | object],
+        consumer_number: int,
+    ) -> None:
+        super().__init__(name=f"telemetry-consumer-{consumer_number}")
+        self._input_queue = input_queue
+        self.processed_count = 0
 
-        distances = {node: inf for node in self._edges}
-        previous: dict[str, str | None] = {
-            node: None for node in self._edges
-        }
+    def run(self) -> None:
+        while True:
+            item = self._input_queue.get()
 
-        distances[start] = 0.0
+            try:
+                if item is STOP_SIGNAL:
+                    LOGGER.info("Consumer received shutdown signal")
+                    return
 
-        # Each heap entry is stored as (distance, node).
-        priority_queue: list[tuple[float, str]] = [(0.0, start)]
+                if not isinstance(item, TelemetryEvent):
+                    LOGGER.warning("Unexpected queue item: %r", item)
+                    continue
 
-        while priority_queue:
-            current_cost, current_node = heapq.heappop(priority_queue)
-
-            # Ignore outdated heap entries created before a shorter path
-            # to this node was discovered.
-            if current_cost > distances[current_node]:
-                continue
-
-            if current_node == destination:
-                break
-
-            for neighbor, edge_cost in self._edges[current_node]:
-                new_cost = current_cost + edge_cost
-
-                if new_cost < distances[neighbor]:
-                    distances[neighbor] = new_cost
-                    previous[neighbor] = current_node
-                    heapq.heappush(
-                        priority_queue,
-                        (new_cost, neighbor),
-                    )
-
-        if distances[destination] == inf:
-            return None
-
-        path = self._reconstruct_path(
-            previous=previous,
-            destination=destination,
-        )
-
-        return RouteResult(
-            path=path,
-            total_cost=distances[destination],
-        )
+                self._process_event(item)
+                self.processed_count += 1
+            except Exception:
+                # One malformed event should not terminate the entire
+                # telemetry processing thread.
+                LOGGER.exception("Failed to process telemetry event")
+            finally:
+                self._input_queue.task_done()
 
     @staticmethod
-    def _reconstruct_path(
-        previous: dict[str, str | None],
-        destination: str,
-    ) -> list[str]:
-        """Walk backward through the previous-node mapping."""
+    def _process_event(event: TelemetryEvent) -> None:
+        """Apply basic alert logic to an incoming event."""
 
-        path: list[str] = []
-        current: str | None = destination
+        if event.engine_rpm >= 9_200:
+            LOGGER.warning(
+                "High RPM for car %s: %s RPM",
+                event.car_number,
+                event.engine_rpm,
+            )
+        else:
+            LOGGER.info(
+                "Processed event %s at %.2f mph",
+                event.sequence_number,
+                event.speed_mph,
+            )
 
-        while current is not None:
-            path.append(current)
-            current = previous[current]
-
-        path.reverse()
-        return path
+        # Simulate a small amount of processing time.
+        time.sleep(0.1)
 
 
 def main() -> None:
-    graph = WeightedGraph()
+    consumer_count = 3
 
-    graph.add_edge("Garage", "Fuel Station", 3.2, bidirectional=True)
-    graph.add_edge("Garage", "Tire Area", 2.0, bidirectional=True)
-    graph.add_edge("Tire Area", "Inspection", 2.3, bidirectional=True)
-    graph.add_edge("Fuel Station", "Inspection", 1.4, bidirectional=True)
-    graph.add_edge("Inspection", "Pit Lane", 1.8, bidirectional=True)
-    graph.add_edge("Tire Area", "Pit Lane", 5.0, bidirectional=True)
+    telemetry_queue: Queue[TelemetryEvent | object] = Queue(
+        maxsize=10
+    )
 
-    result = graph.shortest_path("Garage", "Pit Lane")
+    consumers = [
+        TelemetryConsumer(telemetry_queue, number)
+        for number in range(1, consumer_count + 1)
+    ]
 
-    if result is None:
-        print("No available route.")
-        return
+    producer = TelemetryProducer(
+        output_queue=telemetry_queue,
+        event_count=20,
+        consumer_count=consumer_count,
+    )
 
-    print("Route:", " -> ".join(result.path))
-    print(f"Total cost: {result.total_cost:.1f}")
+    for consumer in consumers:
+        consumer.start()
+
+    producer.start()
+
+    producer.join()
+    telemetry_queue.join()
+
+    for consumer in consumers:
+        consumer.join()
+
+    total_processed = sum(
+        consumer.processed_count for consumer in consumers
+    )
+
+    LOGGER.info("Pipeline complete: %s events processed", total_processed)
 
 
 if __name__ == "__main__":
